@@ -11,3 +11,19 @@ wheels/
 
 # Local credentials and machine-specific configuration
 .env
+
+# Temporary analysis & working files
+.temp/
+.claude/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

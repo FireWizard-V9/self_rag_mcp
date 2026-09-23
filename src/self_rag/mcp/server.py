@@ -88,6 +88,11 @@ def server_health() -> dict:
     return health()
 
 if __name__ == "__main__":
+    import os
     logging.basicConfig(level=logging.INFO)
     _warmup()
-    mcp.run(transport="sse", host="127.0.0.1", port=8000)
+    mcp.run(
+        transport="sse",
+        host=os.getenv("MCP_HOST", "127.0.0.1"),
+        port=int(os.getenv("MCP_PORT", "8000")),
+    )

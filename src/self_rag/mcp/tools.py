@@ -43,8 +43,16 @@ def answer_question(question: str, max_retries: int = 2) -> dict[str, Any]:
         }
 
 
-def retrieve_documents(query: str, top_k: int = 10) -> dict[str, Any]:
-    """Retrieve raw document chunks with metadata."""
+def retrieve_documents(query: str, top_k: int = 10, expand_parents: bool = True) -> dict[str, Any]:
+    """
+    Retrieve documents from the vector database.
+
+    Args:
+        query: Search query
+        top_k: Number of documents to return (clamped to 1-50)
+        expand_parents: If True, expand to parent documents (if configured).
+                       Set to False for plug-and-play with external indexes.
+    """
     if not query.strip():
         return {"status": "error", "message": "Query cannot be empty.", "documents": []}
 
@@ -52,7 +60,7 @@ def retrieve_documents(query: str, top_k: int = 10) -> dict[str, Any]:
         retriever = get_retriever()
         bounded_top_k = max(1, min(top_k, 50))
 
-        docs = retriever.invoke(query=query.strip(), top_k=bounded_top_k)
+        docs = retriever.invoke(query=query.strip(), top_k=bounded_top_k, expand_parents=expand_parents)
 
         formatted_docs = [
             {
@@ -78,18 +86,45 @@ def retrieve_documents(query: str, top_k: int = 10) -> dict[str, Any]:
 
 def health() -> dict[str, Any]:
     """Check service dependencies and return operational status."""
+    from self_rag.core.config import get_settings
+    from self_rag.vectordb.factory import get_vectordb
+
+    settings = get_settings()
+    vectordb_status = "unknown"
+    retrieval_status = "unknown"
+
+    try:
+        # Check VectorDB connectivity
+        vectordb = get_vectordb()
+        if vectordb.health_check():
+            vectordb_status = "operational"
+        else:
+            vectordb_status = "unhealthy"
+    except Exception as e:  # noqa: BLE001
+        vectordb_status = f"unavailable: {e!s}"
+
     try:
         # Check if retriever can be initialized
         _ = get_retriever()
         retrieval_status = "operational"
-    except Exception as e:  # noqa: BLE001 - health checks must report any initialization failure.
+    except Exception as e:  # noqa: BLE001
         retrieval_status = f"unhealthy: {e!s}"
 
+    # Determine overall status: retriever failure = unhealthy, vectordb failure = degraded
+    overall_status = "healthy"
+    if retrieval_status != "operational":
+        overall_status = "unhealthy"
+    elif vectordb_status != "operational":
+        overall_status = "degraded"
+
     return {
-        "status": "healthy" if retrieval_status == "operational" else "degraded",
+        "status": overall_status,
         "components": {
-            "retrieval": "Hybrid Search",
-            "reranker": "CrossEncoder",
+            "vectordb_provider": settings.vectordb_provider,
+            "vectordb_status": vectordb_status,
+            "search_strategy": settings.vectordb_hybrid_strategy,
+            "retrieval": "Hybrid Search (Dense + Sparse + MMR + FlashRank)",
+            "reranker": "CrossEncoder (FlashRank)",
             "retriever_status": retrieval_status,
         },
     }

@@ -71,7 +71,7 @@ def test_retrieve_documents_success():
     assert result["count"] == 1
     assert result["documents"][0]["content"] == "RAG combines retrieval with generation."
     assert result["documents"][0]["metadata"] == {"source": "doc1"}
-    mock_retriever.invoke.assert_called_once_with(query="What is RAG?", top_k=5)
+    mock_retriever.invoke.assert_called_once_with(query="What is RAG?", top_k=5, expand_parents=True)
 
 
 def test_retrieve_documents_clamps_top_k():
@@ -79,7 +79,7 @@ def test_retrieve_documents_clamps_top_k():
     mock_retriever.invoke.return_value = []
     with patch("self_rag.mcp.tools.get_retriever", return_value=mock_retriever):
         retrieve_documents("query", top_k=999)
-    mock_retriever.invoke.assert_called_once_with(query="query", top_k=50)
+    mock_retriever.invoke.assert_called_once_with(query="query", top_k=50, expand_parents=True)
 
 
 def test_retrieve_documents_exception_returns_error():
@@ -94,14 +94,20 @@ def test_retrieve_documents_exception_returns_error():
 # --- health ---
 
 def test_health_operational():
-    with patch("self_rag.mcp.tools.get_retriever", return_value=MagicMock()):
+    mock_vectordb = MagicMock()
+    mock_vectordb.health_check.return_value = True
+    with patch("self_rag.mcp.tools.get_retriever", return_value=MagicMock()), \
+         patch("self_rag.vectordb.factory.get_vectordb", return_value=mock_vectordb):
         result = health()
     assert result["status"] == "healthy"
     assert result["components"]["retriever_status"] == "operational"
 
 
 def test_health_degraded():
-    with patch("self_rag.mcp.tools.get_retriever", side_effect=RuntimeError("no connection")):
+    mock_vectordb = MagicMock()
+    mock_vectordb.health_check.side_effect = RuntimeError("Qdrant connection failed")
+    with patch("self_rag.mcp.tools.get_retriever", return_value=MagicMock()), \
+         patch("self_rag.vectordb.factory.get_vectordb", return_value=mock_vectordb):
         result = health()
     assert result["status"] == "degraded"
-    assert "no connection" in result["components"]["retriever_status"]
+    assert "Qdrant connection failed" in result["components"]["vectordb_status"]

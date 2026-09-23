@@ -1,60 +1,104 @@
-from qdrant_client.models import (
-    Distance,
-    SparseIndexParams,
-    SparseVectorParams,
-    VectorParams,
-)
+from typing import List
 
-from self_rag.clients.qdrant import get_qdrant_client
+from langchain_core.documents import Document
+
+from self_rag.clients.llm import get_embedding_model
 from self_rag.core.config import get_settings
+from self_rag.vectordb.factory import get_vectordb
 
 
-def _create_collection_if_missing(collection_name: str, *, sparse: bool) -> None:
-    """Create a Qdrant collection used for either child search or parent storage."""
+def ingest_documents(
+    parent_chunks: List[Document],
+    child_chunks: List[Document],
+    reset: bool = False,
+) -> None:
+    """
+    DB-agnostic document ingestion supporting both hierarchical and flat structures.
+
+    - If child_chunks is empty: flat ingestion (index parent_chunks as-is, no hierarchy)
+    - If child_chunks exists: hierarchical ingestion (parents + children in two collections)
+    """
+
+    vectordb = get_vectordb()
+    embedding_model = get_embedding_model()
     settings = get_settings()
-    client = get_qdrant_client()
 
-    if client.collection_exists(collection_name):
-        return
+    # Determine ingestion mode
+    use_hierarchy = len(child_chunks) > 0
 
-    sparse_vectors_config = None
-    if sparse:
-        sparse_vectors_config = {
-            "langchain-sparse": SparseVectorParams(
-                index=SparseIndexParams(on_disk=False)
-            )
-        }
+    # Reset if requested
+    if reset:
+        vectordb.reset_collection(settings.qdrant_collection)
+        if use_hierarchy:
+            vectordb.reset_collection(settings.qdrant_parent_collection)
 
-    client.create_collection(
-        collection_name=collection_name,
-        vectors_config=VectorParams(
-            size=settings.embedding_dim,
-            distance=Distance.COSINE,
-        ),
-        sparse_vectors_config=sparse_vectors_config,
+    # Ensure main collection exists with proper config
+    vectordb.ensure_collection(
+        name=settings.qdrant_collection,
+        config={
+            "embedding_dim": settings.embedding_dim,
+            "has_sparse": True,  # Support hybrid search
+        },
     )
 
+    if use_hierarchy:
+        # Hierarchical ingestion: both collections
+        print("Ingestion mode: HIERARCHICAL (parent-child chunks)")
 
-def ensure_collections_exist() -> None:
-    """
-    Creates and configures the Qdrant collection for Hybrid Search:
-    - Dense vectors (semantic) using settings.embedding_dim
-    - Sparse vectors (BM25 keyword) using 'langchain-sparse'
-    """
-    settings = get_settings()
+        vectordb.ensure_collection(
+            name=settings.qdrant_parent_collection,
+            config={
+                "embedding_dim": settings.embedding_dim,
+                "has_sparse": False,  # Parents don't need sparse
+            },
+        )
 
-    _create_collection_if_missing(settings.qdrant_collection, sparse=True)
-    _create_collection_if_missing(settings.qdrant_parent_collection, sparse=False)
+        # Embed and ingest child chunks
+        print(f"Embedding {len(child_chunks)} child chunks...")
+        child_embeddings = embedding_model.embed_documents(
+            [doc.page_content for doc in child_chunks]
+        )
+        child_ids = [doc.metadata["child_id"] for doc in child_chunks]
 
+        print(f"Ingesting {len(child_chunks)} child chunks into {settings.vectordb_provider}...")
+        vectordb.upsert_documents(
+            documents=child_chunks,
+            embeddings=child_embeddings,
+            doc_ids=child_ids,
+            collection_name=settings.qdrant_collection,
+        )
 
-def reset_collections() -> None:
-    """Delete this application's child and parent collections before a full reindex."""
-    settings = get_settings()
-    client = get_qdrant_client()
+        # Embed and ingest parent chunks
+        print(f"Embedding {len(parent_chunks)} parent chunks...")
+        parent_embeddings = embedding_model.embed_documents(
+            [doc.page_content for doc in parent_chunks]
+        )
+        parent_ids = [doc.metadata["parent_id"] for doc in parent_chunks]
 
-    for collection_name in (
-        settings.qdrant_collection,
-        settings.qdrant_parent_collection,
-    ):
-        if client.collection_exists(collection_name):
-            client.delete_collection(collection_name)
+        print(f"Ingesting {len(parent_chunks)} parent chunks...")
+        vectordb.upsert_documents(
+            documents=parent_chunks,
+            embeddings=parent_embeddings,
+            doc_ids=parent_ids,
+            collection_name=settings.qdrant_parent_collection,
+        )
+    else:
+        # Flat ingestion: single collection, no hierarchy
+        print("Ingestion mode: FLAT (no parent-child hierarchy)")
+
+        # Embed and ingest documents as-is
+        print(f"Embedding {len(parent_chunks)} documents...")
+        embeddings = embedding_model.embed_documents(
+            [doc.page_content for doc in parent_chunks]
+        )
+        doc_ids = [doc.metadata.get("doc_id", doc.metadata.get("parent_id")) for doc in parent_chunks]
+
+        print(f"Ingesting {len(parent_chunks)} documents into {settings.vectordb_provider}...")
+        vectordb.upsert_documents(
+            documents=parent_chunks,
+            embeddings=embeddings,
+            doc_ids=doc_ids,
+            collection_name=settings.qdrant_collection,
+        )
+
+    print("Ingestion complete!")

@@ -1,0 +1,156 @@
+                         CLIENT / SELF-RAG
+                                │
+                                ▼
+                       ┌─────────────────┐
+                       │  P/D ROUTER     │
+                       │                 │
+                       │ request routing │
+                       │ P selection     │
+                       │ D selection     │
+                       └────────┬────────┘
+                                │
+                     ┌──────────┴──────────┐
+                     │                     │
+                     ▼                     ▼
+              ┌─────────────┐       ┌─────────────┐
+              │ PREFILL     │       │   DECODE    │
+              │ vLLM V1     │       │  vLLM V1    │
+              │             │       │             │
+              │ KV Producer │       │ KV Consumer │
+              │             │       │             │
+              │ GPU 0       │       │ GPU 1       │
+              └──────┬──────┘       └──────┬──────┘
+                     │                     │
+                     │      NIXL           │
+                     └────── KV ───────────┘
+                            transfer
+                            
+                            
+                            
+NIXL is specifically implemented as a KV-cache transfer connector for disaggregated prefill/decode
+
+
+Prefill GPU
+    │
+    │ KV blocks
+    ▼
+NIXL / LMCache
+    │
+    │ high-speed transfer
+    ▼
+Decode GPU
+
+
+NIXL supports asynchronous KV transfer
+
+
+
+
+
+Docker Compose
+
+router
+   │
+   ├── vllm-prefill
+   │       GPU 0
+   │       NixlConnector
+   │       kv_producer
+   │
+   └── vllm-decode
+           GPU 1
+           NixlConnector
+           kv_consumer
+
+For example, the current vLLM NIXL setup uses:
+
+Prefill:
+kv_connector = NixlConnector
+kv_role      = kv_producer
+
+Decode:
+kv_connector = NixlConnector
+kv_role      = kv_consumer
+
+
+
+
+Add LMCache
+
+                    ┌───────────────┐
+                    │    Router     │
+                    └───────┬───────┘
+                            │
+             ┌──────────────┴──────────────┐
+             ▼                             ▼
+       ┌───────────┐                 ┌───────────┐
+       │  Prefill  │                 │  Decode   │
+       │   vLLM    │                 │   vLLM    │
+       └─────┬─────┘                 └─────▲─────┘
+             │                             │
+             │        NIXL                 │
+             └────────── KV ───────────────┘
+                          │
+                          │
+                    ┌─────▼─────┐
+                    │ LMCache   │
+                    │ KV layer  │
+                    └─────┬─────┘
+                          │
+                   optional tiers
+                          │
+                ┌─────────┴─────────┐
+                │                   │
+              CPU/RAM             Storage
+              
+              
+NIXL = transport, while LMCache = KV cache management/storage layer
+
+
+
+
+                         Self-RAG
+                            │
+                            ▼
+                    ┌───────────────┐
+                    │    llm-d      │
+                    │ Router / EPP  │
+                    └───────┬───────┘
+                            │
+              ┌─────────────┴─────────────┐
+              │                           │
+              ▼                           ▼
+       ┌─────────────┐             ┌─────────────┐
+       │   PREFILL   │             │    DECODE   │
+       │   vLLM V1   │             │   vLLM V1   │
+       │             │             │             │
+       │ kv_producer │             │ kv_consumer │
+       └──────┬──────┘             └──────▲──────┘
+              │                           │
+              │       NIXL / RDMA         │
+              └────────── KV ─────────────┘
+              
+              
+              
+EC2
+│
+├── g6.2xlarge
+│     └── vLLM Prefill
+│
+├── g6.2xlarge
+│     └── vLLM Decode
+│
+└── t3.medium
+      └── llm-d router
+      
+      
+      
+                      llm-d
+                  │
+          ┌───────┴────────┐
+          │ Routing Policy │
+          └───────┬────────┘
+                  │
+       ┌──────────┼──────────┐
+       ▼          ▼          ▼
+   shortest    KV-aware   load-aware
+    queue       routing     routing

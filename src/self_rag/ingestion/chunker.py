@@ -8,14 +8,40 @@ from self_rag.core.config import get_settings
 
 def split_documents(
     documents: list[Document],
+    use_hierarchy: bool = True,
 ) -> tuple[list[Document], list[Document]]:
     """
     Splits documents into a hierarchy of Parent and Child chunks.
 
+    If use_hierarchy=False, returns documents as-is (no child chunks).
+    If use_hierarchy=True, creates parent-child hierarchy.
+
+    Args:
+        documents: Raw documents to split
+        use_hierarchy: If True, create parent-child chunks. If False, return flat structure.
+
     Returns:
         tuple[list[Document], list[Document]]: (parent_chunks, child_chunks)
+        - If use_hierarchy=False: (documents_with_ids, [])
+        - If use_hierarchy=True: (parent_chunks, child_chunks)
     """
     settings = get_settings()
+
+    # Flat ingestion: skip hierarchy, just index as-is
+    if not use_hierarchy:
+        for doc_idx, doc in enumerate(documents):
+            if "doc_id" not in doc.metadata:
+                source = doc.metadata.get("source", "unknown-source")
+                doc.metadata["doc_id"] = str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"{source}:{doc_idx}:{doc.page_content}",
+                    )
+                )
+            doc.metadata["is_parent"] = False
+        return documents, []
+
+    # Hierarchical ingestion: split into parent-child chunks
     parent_splitter = RecursiveCharacterTextSplitter(
         chunk_size=settings.parent_chunk_size,
         chunk_overlap=settings.parent_chunk_overlap,

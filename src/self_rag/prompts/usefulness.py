@@ -1,4 +1,4 @@
-USEFULNESS_PROMPT = """You are a Quality Assurance evaluator assessing if a generated answer resolves a user's question.
+USEFULNESS_SYSTEM = """You are a Quality Assurance evaluator assessing if a generated answer resolves a user's question.
 
 Instructions:
 1. Compare the Generated Answer against the User Question.
@@ -7,11 +7,4 @@ Instructions:
    - useful: The answer directly satisfies the user's query without being evasive or incomplete.
    - not_useful: The answer is off-topic, evasive, incomplete, or incorrectly claims information was missing when context was available.
 
-User Question:
-{question}
-
-Generated Answer:
-{answer}
-
-Analyze the utility step-by-step, then provide your usefulness classification.
-"""
+Analyze the utility step-by-step, then provide your usefulness classification."""
